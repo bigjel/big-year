@@ -1,0 +1,271 @@
+"use client";
+import React, { useMemo } from "react";
+import { cn } from "@/lib/utils";
+
+export type AllDayEvent = {
+  id: string;
+  summary: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD (exclusive)
+};
+
+function formatDateKey(date: Date) {
+  const y = date.getFullYear();
+  const m = `${date.getMonth() + 1}`.padStart(2, "0");
+  const d = `${date.getDate()}`.padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function expandEventsToDateMap(events: AllDayEvent[]) {
+  const map = new Map<string, AllDayEvent[]>();
+  for (const ev of events) {
+    const start = new Date(ev.startDate + "T00:00:00Z");
+    const end = new Date(ev.endDate + "T00:00:00Z"); // exclusive
+    for (let d = new Date(start); d < end; d.setUTCDate(d.getUTCDate() + 1)) {
+      const local = new Date(
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+      );
+      const key = formatDateKey(
+        new Date(
+          local.getUTCFullYear(),
+          local.getUTCMonth(),
+          local.getUTCDate()
+        )
+      );
+      const list = map.get(key) ?? [];
+      list.push(ev);
+      map.set(key, list);
+    }
+  }
+  return map;
+}
+
+function generateYearDays(year: number) {
+  const start = new Date(year, 0, 1);
+  const end = new Date(year + 1, 0, 1);
+  const days: Array<{ key: string; date: Date }> = [];
+  for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+    const date = new Date(d);
+    days.push({ key: formatDateKey(date), date });
+  }
+  return days;
+}
+
+function computeSquareGridColumns(
+  totalDays: number,
+  width: number,
+  height: number,
+  gapPx = 1
+) {
+  if (width <= 0 || height <= 0) return { cols: 1, cell: 10 };
+  let bestCols = 1;
+  let bestCell = 0;
+  const maxCols = Math.min(totalDays, Math.max(1, Math.floor(width))); // safe upper bound
+  for (let cols = 1; cols <= maxCols; cols++) {
+    const usableWidth = width - (cols - 1) * gapPx;
+    const cellSize = Math.floor(usableWidth / cols);
+    if (cellSize <= 0) break;
+    const rows = Math.ceil(totalDays / cols);
+    const totalHeight = rows * cellSize + (rows - 1) * gapPx;
+    if (totalHeight <= height) {
+      if (cellSize > bestCell) {
+        bestCell = cellSize;
+        bestCols = cols;
+      }
+    }
+  }
+  if (bestCell === 0) {
+    // Fallback if nothing fit: pick minimal cell that fits width and let height scroll slightly
+    const usableWidth = width - (bestCols - 1) * gapPx;
+    bestCell = Math.max(10, Math.floor(usableWidth / bestCols));
+  }
+  return { cols: bestCols, cell: bestCell };
+}
+
+const monthShort = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+export function YearCalendar({
+  year,
+  events,
+  signedIn,
+}: {
+  year: number;
+  events: AllDayEvent[];
+  signedIn: boolean;
+}) {
+  const todayKey = formatDateKey(new Date());
+  const dateMap = useMemo(() => expandEventsToDateMap(events), [events]);
+  const days = useMemo(() => generateYearDays(year), [year]);
+  const dayIndexByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    days.forEach((d, i) => map.set(d.key, i));
+    return map;
+  }, [days]);
+  const gridRef = React.useRef<HTMLDivElement | null>(null);
+  const [cellSizePx, setCellSizePx] = React.useState<{ w: number; h: number }>({
+    w: 0,
+    h: 0,
+  });
+
+  // Important for hydration: start with a deterministic server/client match,
+  // then compute real columns after mount to avoid style mismatches.
+  const [gridDims, setGridDims] = React.useState<{
+    cols: number;
+    cell: number;
+  }>(() => ({
+    cols: 12,
+    cell: 12,
+  }));
+
+  React.useEffect(() => {
+    function onResize() {
+      setGridDims(
+        computeSquareGridColumns(
+          days.length,
+          window.innerWidth,
+          window.innerHeight
+        )
+      );
+    }
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [days.length]);
+  React.useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const firstCell = grid.querySelector<HTMLElement>('[data-day-cell="1"]');
+    if (firstCell) {
+      const rect = firstCell.getBoundingClientRect();
+      if (rect.width && rect.height) {
+        setCellSizePx({ w: rect.width, h: rect.height });
+      }
+    }
+  }, [gridDims.cols, gridDims.cell, year]);
+
+  return (
+    <div className="h-full w-full overflow-hidden">
+      <div className="relative h-full w-full">
+        <div
+          ref={gridRef}
+          className="grid h-full w-full bg-border p-px"
+          suppressHydrationWarning
+          style={{
+            gridTemplateColumns: `repeat(${gridDims.cols}, 1fr)`,
+            gridAutoRows: `${gridDims.cell}px`,
+            gap: "1px",
+          }}
+        >
+          {days.map(({ key, date }) => {
+            const isToday = key === todayKey;
+            const dayEvents = dateMap.get(key) || [];
+            const isFirstOfMonth = date.getDate() === 1;
+            const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+            return (
+              <div
+                key={key}
+                data-day-cell="1"
+                className={cn(
+                  "relative bg-background p-1 min-w-0 min-h-0 overflow-hidden",
+                  isWeekend &&
+                    'bg-white before:content-[""] before:absolute before:inset-0 before:bg-[rgba(0,0,0,0.02)] before:pointer-events-none',
+                  isToday && "ring-2 ring-primary"
+                )}
+                title={date.toDateString()}
+              >
+                {isFirstOfMonth && (
+                  <div className="absolute top-1 left-1 text-[10px] leading-none uppercase tracking-wide text-primary">
+                    {monthShort[date.getMonth()]}
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    "mb-0.5 text-[10px] leading-none text-muted-foreground",
+                    isToday && "text-primary font-semibold",
+                    isFirstOfMonth && "ml-7"
+                  )}
+                >
+                  {date.getDate()}
+                </div>
+                {/* Event chips removed; events are rendered as spanning bars below */}
+              </div>
+            );
+          })}
+        </div>
+        {/* Absolute overlay using pixel positioning to perfectly align with day cells */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{ padding: 1 }}
+        >
+          {React.useMemo(() => {
+            const cols = gridDims.cols || 12;
+            const gap = 1; // matches gap-px
+            const pad = 0; // already accounted by wrapper padding style above
+            if (!cols || !cellSizePx.w || !cellSizePx.h) return null;
+            const bars: Array<React.ReactElement> = [];
+            for (const ev of events) {
+              const startIdx = dayIndexByKey.get(ev.startDate);
+              const endIdxExclusive = dayIndexByKey.get(ev.endDate);
+              if (startIdx == null || endIdxExclusive == null) continue;
+              let segStart = startIdx;
+              while (segStart < endIdxExclusive) {
+                const row = Math.floor(segStart / cols);
+                const rowEndExclusive = Math.min(
+                  endIdxExclusive,
+                  (row + 1) * cols
+                );
+                const colStart0 = segStart % cols; // 0-based
+                const span = rowEndExclusive - segStart;
+                const left = pad + colStart0 * (cellSizePx.w + gap);
+                const top = pad + row * (cellSizePx.h + gap) + 20; // 20px to clear numbers
+                const width = span * cellSizePx.w + (span - 1) * gap;
+                const key = `${ev.id}:${row}:${colStart0}-${span}`;
+                bars.push(
+                  <div
+                    key={key}
+                    style={{
+                      position: "absolute",
+                      left,
+                      top,
+                      width,
+                    }}
+                    className="px-1"
+                  >
+                    <div className="truncate rounded-sm bg-secondary px-1 py-0.5 text-[10px] text-secondary-foreground shadow-sm">
+                      {ev.summary}
+                    </div>
+                  </div>
+                );
+                segStart = rowEndExclusive;
+              }
+            }
+            return bars;
+          }, [events, dayIndexByKey, gridDims.cols, cellSizePx])}
+        </div>
+      </div>
+
+      {!signedIn && (
+        <div className="pointer-events-none fixed inset-0 flex items-center justify-center bg-background/70">
+          <div className="rounded-md border bg-card p-4 text-center shadow-sm">
+            <div className="text-lg font-medium">Sign in with Google</div>
+            <div className="text-sm text-muted-foreground">
+              Only all-day events will appear once you sign in.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
