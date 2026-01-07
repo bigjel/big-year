@@ -251,25 +251,55 @@ export function YearCalendar({
     cell: 12,
   }));
 
+  // Calculate actual cell width for month name visibility check
+  const cellWidth = React.useMemo(() => {
+    if (cellSizePx.w > 0) return cellSizePx.w;
+    if (alignWeekends && gridDims.cols > 0) {
+      const gap = 1;
+      const usableWidth =
+        typeof window !== "undefined" ? window.innerWidth - 2 : 0;
+      return Math.floor(
+        (usableWidth - (gridDims.cols - 1) * gap) / gridDims.cols
+      );
+    }
+    return gridDims.cell;
+  }, [cellSizePx.w, gridDims.cols, gridDims.cell, alignWeekends]);
+
   React.useEffect(() => {
     function onResize() {
       if (alignWeekends) {
-        // Fixed 28 columns (4 weeks × 7 days)
+        // Dynamically calculate how many weeks can fit based on viewport width
         const gap = 1;
+        const minCellSize = 60; // Minimum cell size in pixels (50-100px range)
         const usableWidth = window.innerWidth - 2; // account for border
-        const widthBasedCell = Math.max(
-          10,
-          Math.floor((usableWidth - 27 * gap) / 28)
-        );
-        const rows = Math.ceil(days.length / 28);
         const usableHeight = window.innerHeight - 2; // account for border
+
+        // Calculate maximum weeks that can fit with minimum cell size
+        // Each week = 7 days, so columns = weeks * 7
+        // usableWidth = cols * cellSize + (cols - 1) * gap
+        // usableWidth = cols * minCellSize + (cols - 1) * gap
+        // usableWidth = cols * (minCellSize + gap) - gap
+        // cols = (usableWidth + gap) / (minCellSize + gap)
+        const maxCols = Math.floor((usableWidth + gap) / (minCellSize + gap));
+        const maxWeeks = Math.floor(maxCols / 7);
+
+        // Ensure at least 1 week, and cap at a reasonable maximum (e.g., 8 weeks)
+        const weeks = Math.max(1, Math.min(maxWeeks, 8));
+        const cols = weeks * 7;
+
+        // Calculate cell size based on the number of weeks
+        const widthBasedCell = Math.max(
+          minCellSize,
+          Math.floor((usableWidth - (cols - 1) * gap) / cols)
+        );
+        const rows = Math.ceil(days.length / cols);
         const heightBasedCell = Math.max(
-          10,
+          minCellSize,
           Math.floor((usableHeight - (rows - 1) * gap) / rows)
         );
         // Use the smaller of the two to ensure it fits both dimensions
         const cellSize = Math.min(widthBasedCell, heightBasedCell);
-        setGridDims({ cols: 28, cell: cellSize });
+        setGridDims({ cols, cell: cellSize });
       } else {
         setGridDims(
           computeSquareGridColumns(
@@ -394,11 +424,11 @@ export function YearCalendar({
   }
 
   return (
-    <div className="h-full w-full overflow-hidden">
-      <div className="relative h-full w-full">
+    <div className="h-full w-full overflow-y-auto overflow-x-hidden">
+      <div className="relative min-h-full w-full">
         <div
           ref={gridRef}
-          className="grid h-full w-full bg-border p-px"
+          className="grid min-h-full w-full bg-border p-px"
           suppressHydrationWarning
           style={{
             gridTemplateColumns: `repeat(${gridDims.cols}, 1fr)`,
@@ -430,7 +460,8 @@ export function YearCalendar({
                   "relative bg-background p-1 min-w-0 min-h-0 overflow-hidden",
                   isWeekend &&
                     'bg-white before:content-[""] before:absolute before:inset-0 before:bg-[rgba(0,0,0,0.02)] before:pointer-events-none',
-                  isToday && "ring-1 ring-primary"
+                  isToday && "ring-1 ring-primary",
+                  isFirstOfMonth && "border-l-2 border-foreground"
                 )}
                 title={date.toDateString()}
                 onClick={(e) => {
@@ -439,14 +470,15 @@ export function YearCalendar({
                   onDayClick?.(key);
                 }}
               >
-                {isFirstOfMonth && (
+                {isFirstOfMonth && cellWidth > 60 && (
                   <div className="absolute top-1 left-1 text-[10px] leading-none uppercase tracking-wide text-primary">
                     {monthShort[date.getMonth()]}
                   </div>
                 )}
                 <div
                   className={cn(
-                    "absolute top-1 right-1 text-[10px] leading-none text-muted-foreground text-right",
+                    "absolute top-1 text-[10px] leading-none text-muted-foreground",
+                    cellWidth > 60 ? "right-1 text-right" : "left-1 text-left",
                     isToday && "text-primary font-semibold"
                   )}
                 >
